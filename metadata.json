@@ -1,0 +1,5 @@
+{
+  "name": "Automated Lead Engine",
+  "description": "Dashboard for managing Google Maps scraping jobs, analyzing leads, and generating demo websites.",
+  "requestFramePermissions": []
+}

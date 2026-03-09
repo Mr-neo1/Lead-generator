@@ -1,0 +1,75 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: leaduser
+      POSTGRES_PASSWORD: leadpassword
+      POSTGRES_DB: leadengine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leaduser -d leadengine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379
+      - USE_REDIS=true
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Single combined worker for resource efficiency
+  worker:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Process all queues with one worker (demo queue excluded since disabled)
+    command: rq worker discovery details analysis --url redis://redis:6379
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  postgres_data:

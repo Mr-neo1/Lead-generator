@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: leaduser
+      POSTGRES_PASSWORD: leadpassword
+      POSTGRES_DB: leadengine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leaduser -d leadengine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379/0
+      - USE_REDIS=true
+    volumes:
+      - .:/app
+      - demo_sites:/app/demo_sites
+
+  worker_discovery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: rq worker discovery --url redis://redis:6379/0 --with-scheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    deploy:
+      replicas: 2
+
+  worker_details:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: rq worker details --url redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    deploy:
+      replicas: 6
+
+  worker_analysis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: rq worker analysis --url redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    deploy:
+      replicas: 2
+
+  worker_demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: rq worker demo --url redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+      - demo_sites:/app/demo_sites
+    deploy:
+      replicas: 2
+
+volumes:
+  postgres_data:
+  redis_data:
+  demo_sites:
