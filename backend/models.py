@@ -10,6 +10,9 @@ class ScrapingJob(Base):
     radius = Column(Integer)
     grid_size = Column(String)
     status = Column(String, default="pending")
+    total_tasks = Column(Integer, default=0)  # Total grid points to scrape
+    completed_tasks = Column(Integer, default=0)  # Completed grid points
+    leads_found = Column(Integer, default=0)  # Total businesses found
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Business(Base):

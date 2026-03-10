@@ -16,6 +16,9 @@ interface Job {
   radius: number
   grid_size: string
   status: string
+  total_tasks: number
+  completed_tasks: number
+  leads_found: number
   created_at: string | null
 }
 
@@ -85,8 +88,23 @@ export default function JobsPage() {
                     <Badge variant={job.status === "completed" ? "default" : job.status === "running" ? "secondary" : job.status === "failed" ? "destructive" : "outline"}>
                       {job.status}
                     </Badge>
+                    {job.status === "running" && job.total_tasks > 0 && (
+                      <div className="mt-1">
+                        <div className="w-20 h-1.5 bg-zinc-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-blue-500 transition-all" 
+                            style={{ width: `${Math.round((job.completed_tasks / job.total_tasks) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-zinc-500">{job.completed_tasks}/{job.total_tasks}</span>
+                      </div>
+                    )}
                   </TableCell>
-                  <TableCell>-</TableCell>
+                  <TableCell>
+                    <span className={job.leads_found > 0 ? "font-semibold text-emerald-600" : "text-zinc-400"}>
+                      {job.leads_found || 0}
+                    </span>
+                  </TableCell>
                   <TableCell>{job.created_at ? new Date(job.created_at).toLocaleDateString() : '-'}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">

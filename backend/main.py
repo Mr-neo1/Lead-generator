@@ -53,20 +53,26 @@ app.add_middleware(
 def create_job(job: JobCreate, db: Session = Depends(get_db)):
     job_id = f"JOB-{str(uuid.uuid4())[:8].upper()}"
     
+    # Calculate total grid points
+    coordinates = generate_grid(job.location, job.radius, job.grid_size)
+    total_tasks = len(coordinates)
+    
     new_job = ScrapingJob(
         job_id=job_id,
         keyword=job.keyword,
         location=job.location,
         radius=job.radius,
         grid_size=job.grid_size,
-        status="pending" if not USE_REDIS else "running"
+        status="pending" if not USE_REDIS else "running",
+        total_tasks=total_tasks,
+        completed_tasks=0,
+        leads_found=0
     )
     db.add(new_job)
     db.commit()
     
     # Generate Grid and Queue Discovery Tasks (only if Redis is available)
     if USE_REDIS and q_discovery:
-        coordinates = generate_grid(job.location, job.radius, job.grid_size)
         for lat, lng in coordinates:
             # Enqueue the task in RQ
             q_discovery.enqueue('tasks.run_discovery', job_id, job.keyword, lat, lng)
@@ -75,14 +81,13 @@ def create_job(job: JobCreate, db: Session = Depends(get_db)):
 
 @app.get("/api/leads")
 def get_leads(db: Session = Depends(get_db)):
-    # Join Business, Analysis, and Demo tables
-    results = db.query(Business, LeadAnalysis, DemoSite)\
+    # Join Business and Analysis tables (removed DemoSite)
+    results = db.query(Business, LeadAnalysis)\
         .outerjoin(LeadAnalysis, Business.id == LeadAnalysis.business_id)\
-        .outerjoin(DemoSite, Business.id == DemoSite.business_id)\
         .all()
         
     leads = []
-    for biz, analysis, demo in results:
+    for biz, analysis in results:
         leads.append({
             "id": biz.id,
             "name": biz.name,
@@ -91,15 +96,16 @@ def get_leads(db: Session = Depends(get_db)):
             "rating": biz.rating,
             "reviews": biz.reviews,
             "category": biz.category,
+            "address": biz.address,
+            "maps_url": biz.maps_url,
             "type": analysis.lead_type if analysis else "UNKNOWN",
-            "score": analysis.lead_score if analysis else 0,
-            "demoUrl": demo.demo_url if demo else None
+            "score": analysis.lead_score if analysis else 0
         })
     return leads
 
 @app.get("/api/jobs")
 def get_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(ScrapingJob).all()
+    jobs = db.query(ScrapingJob).order_by(ScrapingJob.created_at.desc()).all()
     return [
         {
             "job_id": job.job_id,
@@ -108,6 +114,9 @@ def get_jobs(db: Session = Depends(get_db)):
             "radius": job.radius,
             "grid_size": job.grid_size,
             "status": job.status,
+            "total_tasks": job.total_tasks or 0,
+            "completed_tasks": job.completed_tasks or 0,
+            "leads_found": job.leads_found or 0,
             "created_at": job.created_at.isoformat() if job.created_at else None
         }
         for job in jobs
@@ -117,14 +126,16 @@ def get_jobs(db: Session = Depends(get_db)):
 def get_stats(db: Session = Depends(get_db)):
     total_businesses = db.query(Business).count()
     qualified_leads = db.query(LeadAnalysis).filter(LeadAnalysis.lead_score >= 5).count()
-    demo_sites = db.query(DemoSite).count()
+    no_website_leads = db.query(LeadAnalysis).filter(LeadAnalysis.lead_type == "NO_WEBSITE").count()
     active_jobs = db.query(ScrapingJob).filter(ScrapingJob.status == "running").count()
+    completed_jobs = db.query(ScrapingJob).filter(ScrapingJob.status == "completed").count()
     
     return {
         "totalBusinesses": total_businesses,
         "qualifiedLeads": qualified_leads,
-        "demoSites": demo_sites,
-        "activeJobs": active_jobs
+        "noWebsiteLeads": no_website_leads,
+        "activeJobs": active_jobs,
+        "completedJobs": completed_jobs
     }
 
 @app.post("/api/seed")
@@ -193,9 +204,8 @@ def export_leads(
     db: Session = Depends(get_db)
 ):
     """Export leads as CSV file"""
-    query = db.query(Business, LeadAnalysis, DemoSite)\
-        .outerjoin(LeadAnalysis, Business.id == LeadAnalysis.business_id)\
-        .outerjoin(DemoSite, Business.id == DemoSite.business_id)
+    query = db.query(Business, LeadAnalysis)\
+        .outerjoin(LeadAnalysis, Business.id == LeadAnalysis.business_id)
     
     if lead_type:
         query = query.filter(LeadAnalysis.lead_type == lead_type)
@@ -212,11 +222,11 @@ def export_leads(
     writer.writerow([
         "Business Name", "Phone", "Website", "Rating", "Reviews", 
         "Category", "Address", "Google Maps Link", "Lead Type", 
-        "Lead Score", "Demo Site URL"
+        "Lead Score"
     ])
     
     # Data rows
-    for biz, analysis, demo in results:
+    for biz, analysis in results:
         writer.writerow([
             biz.name,
             biz.phone or "",
@@ -227,8 +237,7 @@ def export_leads(
             biz.address or "",
             biz.maps_url or "",
             analysis.lead_type if analysis else "UNKNOWN",
-            analysis.lead_score if analysis else 0,
-            demo.demo_url if demo else ""
+            analysis.lead_score if analysis else 0
         ])
     
     output.seek(0)
@@ -237,6 +246,82 @@ def export_leads(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=leads_export.csv"}
     )
+
+@app.get("/api/stats/advanced")
+def get_advanced_stats(db: Session = Depends(get_db)):
+    """Get detailed statistics for dashboard charts"""
+    
+    # Lead type distribution
+    lead_type_counts = db.query(
+        LeadAnalysis.lead_type,
+        func.count(LeadAnalysis.business_id)
+    ).group_by(LeadAnalysis.lead_type).all()
+    
+    lead_types = {lt: count for lt, count in lead_type_counts}
+    
+    # Score distribution (0-8)
+    score_distribution = []
+    for score in range(9):
+        count = db.query(LeadAnalysis).filter(LeadAnalysis.lead_score == score).count()
+        score_distribution.append({"score": score, "count": count})
+    
+    # Top categories
+    category_counts = db.query(
+        Business.category,
+        func.count(Business.id)
+    ).filter(Business.category.isnot(None))\
+     .group_by(Business.category)\
+     .order_by(func.count(Business.id).desc())\
+     .limit(10).all()
+    
+    top_categories = [{"category": cat or "Unknown", "count": count} for cat, count in category_counts]
+    
+    # High value leads (score >= 6)
+    high_value_leads = db.query(Business, LeadAnalysis)\
+        .join(LeadAnalysis, Business.id == LeadAnalysis.business_id)\
+        .filter(LeadAnalysis.lead_score >= 6)\
+        .order_by(LeadAnalysis.lead_score.desc())\
+        .limit(5).all()
+    
+    top_leads = [{
+        "id": biz.id,
+        "name": biz.name,
+        "category": biz.category,
+        "phone": biz.phone,
+        "rating": biz.rating,
+        "type": analysis.lead_type,
+        "score": analysis.lead_score
+    } for biz, analysis in high_value_leads]
+    
+    # Recent jobs with progress
+    recent_jobs = db.query(ScrapingJob)\
+        .order_by(ScrapingJob.created_at.desc())\
+        .limit(5).all()
+    
+    jobs_progress = [{
+        "job_id": job.job_id,
+        "keyword": job.keyword,
+        "location": job.location,
+        "status": job.status,
+        "progress": round((job.completed_tasks or 0) / (job.total_tasks or 1) * 100, 1),
+        "leads_found": job.leads_found or 0
+    } for job in recent_jobs]
+    
+    # Average rating of leads
+    avg_rating = db.query(func.avg(Business.rating)).filter(Business.rating.isnot(None)).scalar() or 0
+    
+    return {
+        "leadTypeDistribution": {
+            "NO_WEBSITE": lead_types.get("NO_WEBSITE", 0),
+            "WEBSITE_REDESIGN": lead_types.get("WEBSITE_REDESIGN", 0),
+            "NORMAL": lead_types.get("NORMAL", 0)
+        },
+        "scoreDistribution": score_distribution,
+        "topCategories": top_categories,
+        "topLeads": top_leads,
+        "recentJobs": jobs_progress,
+        "averageRating": round(avg_rating, 1)
+    }
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, db: Session = Depends(get_db)):

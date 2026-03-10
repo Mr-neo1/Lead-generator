@@ -33,6 +33,27 @@ def update_job_status(job_id: str, status: str):
     finally:
         db.close()
 
+def increment_job_progress(job_id: str, new_leads: int = 0):
+    """Increment job progress and check if completed"""
+    db = SessionLocal()
+    try:
+        job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+        if job:
+            job.completed_tasks = (job.completed_tasks or 0) + 1
+            job.leads_found = (job.leads_found or 0) + new_leads
+            
+            # Check if all tasks are completed
+            if job.total_tasks > 0 and job.completed_tasks >= job.total_tasks:
+                job.status = "completed"
+                logger.info(f"Job {job_id} completed! Found {job.leads_found} leads.")
+            
+            db.commit()
+            logger.info(f"Job {job_id} progress: {job.completed_tasks}/{job.total_tasks}")
+    except Exception as e:
+        logger.error(f"Error updating job progress: {e}")
+    finally:
+        db.close()
+
 def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
     """
     Stage 1: Discover businesses from Google Maps for a specific coordinate
@@ -72,11 +93,17 @@ def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
                 db.rollback()
                 
         db.close()
+        
+        # Update job progress
+        increment_job_progress(job_id, new_count)
+        
         logger.info(f"[Discovery] Completed: {new_count} new businesses added")
         return {"job_id": job_id, "new_businesses": new_count}
         
     except Exception as e:
         logger.error(f"[Discovery] Error: {e}")
+        # Still increment progress even on error so job can complete
+        increment_job_progress(job_id, 0)
         raise
 
 def run_details_fetch(business_id: int, maps_url: str):

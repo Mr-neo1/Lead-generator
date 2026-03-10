@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Download, ExternalLink, Filter, Search } from "lucide-react"
+import { Download, Filter, Search } from "lucide-react"
 import { useState, useEffect } from "react"
 import { API_URL } from "@/lib/config"
 
@@ -18,9 +18,10 @@ interface Lead {
   rating: number | null
   reviews: number | null
   category: string | null
+  address: string | null
+  maps_url: string | null
   type: string
   score: number
-  demoUrl: string | null
 }
 
 export default function LeadsPage() {
@@ -104,7 +105,6 @@ export default function LeadsPage() {
                 <TableHead>Rating</TableHead>
                 <TableHead>Lead Type</TableHead>
                 <TableHead>Score</TableHead>
-                <TableHead>Demo Site</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -132,15 +132,6 @@ export default function LeadsPage() {
                       {lead.score}/8
                     </div>
                   </TableCell>
-                  <TableCell>
-                    {lead.demoUrl ? (
-                      <a href="#" className="text-indigo-600 hover:underline text-sm flex items-center gap-1">
-                        View Demo <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ) : (
-                      <span className="text-xs text-zinc-400">Not generated</span>
-                    )}
-                  </TableCell>
                   <TableCell className="text-right">
                     <Button variant="outline" size="sm">Details</Button>
                   </TableCell>
@@ -148,7 +139,7 @@ export default function LeadsPage() {
               ))}
               {filteredLeads.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-zinc-500">
+                  <TableCell colSpan={6} className="text-center py-8 text-zinc-500">
                     No leads found matching your criteria.
                   </TableCell>
                 </TableRow>
