@@ -355,6 +355,34 @@ def delete_job(job_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"message": f"Job {job_id} deleted"}
 
+@app.post("/api/jobs/{job_id}/pause")
+def pause_job(job_id: str, db: Session = Depends(get_db)):
+    """Pause a running job"""
+    job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status == "running":
+        job.status = "paused"
+        db.commit()
+        return {"message": f"Job {job_id} paused", "status": "paused"}
+    else:
+        return {"message": f"Job is not running (current: {job.status})", "status": job.status}
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str, db: Session = Depends(get_db)):
+    """Resume a paused job"""
+    job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status == "paused":
+        job.status = "running"
+        db.commit()
+        return {"message": f"Job {job_id} resumed", "status": "running"}
+    else:
+        return {"message": f"Job is not paused (current: {job.status})", "status": job.status}
+
 @app.post("/api/jobs/{job_id}/restart")
 def restart_job(job_id: str, db: Session = Depends(get_db)):
     """Restart a failed or pending job"""
