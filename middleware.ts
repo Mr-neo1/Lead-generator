@@ -1,25 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 
-function isPublicAsset(pathname: string): boolean {
-  return (
-    pathname.startsWith("/_next/") ||
-    pathname.startsWith("/api/auth/") ||
-    pathname === "/favicon.ico" ||
-    /\.[a-zA-Z0-9]+$/.test(pathname)
-  );
-}
-
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow all public assets to pass through
-  if (isPublicAsset(pathname)) {
-    return NextResponse.next();
-  }
-
-  // Allow login page without auth
-  if (pathname === "/login") {
+  // Public pages that don't require authentication
+  if (pathname === "/login" || pathname === "/") {
     return NextResponse.next();
   }
 
@@ -52,6 +38,13 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/auth).*)",
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public folder
+     */
+    "/((?!_next/static|_next/image|favicon.ico|public).*)",
   ],
 };
