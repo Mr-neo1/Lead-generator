@@ -3,16 +3,47 @@ from playwright.async_api import async_playwright
 import random
 import logging
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
-# User agents rotation
+# Configurable delays from environment
+SCRAPE_DELAY_MIN = float(os.getenv("SCRAPE_DELAY_MIN", "1.0"))
+SCRAPE_DELAY_MAX = float(os.getenv("SCRAPE_DELAY_MAX", "3.0"))
+
+# Expanded user agents rotation (20+ agents for better anti-detection)
 USER_AGENTS = [
+    # Chrome Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    # Chrome Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    # Firefox Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    # Firefox Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0",
+    # Safari Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    # Edge Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+    # Chrome Linux
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    # Firefox Linux
+    "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
 ]
 
 async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_results: int = 120):
@@ -31,49 +62,122 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
     results = []
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        # Launch browser with anti-detection args
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu'
+            ]
+        )
+        
+        # Randomize viewport for fingerprint variation
+        viewport_options = [
+            {'width': 1920, 'height': 1080},
+            {'width': 1536, 'height': 864},
+            {'width': 1440, 'height': 900},
+            {'width': 1366, 'height': 768},
+            {'width': 1280, 'height': 720},
+        ]
+        
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),
-            viewport={'width': 1920, 'height': 1080},
-            locale='en-US'
+            viewport=random.choice(viewport_options),
+            locale='en-US',
+            timezone_id='America/New_York',
+            geolocation={'latitude': lat, 'longitude': lng},
+            permissions=['geolocation']
         )
+        
         page = await context.new_page()
+        
+        # Anti-detection scripts
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
         
         try:
             # Search URL with coordinates
             url = f"https://www.google.com/maps/search/{keyword}/@{lat},{lng},15z"
             logger.info(f"Navigating to: {url}")
             
-            await page.goto(url, timeout=30000)
-            await asyncio.sleep(random.uniform(3, 5))  # Anti-blocking delay
+            # Random delay before navigation
+            await asyncio.sleep(random.uniform(SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX))
             
-            # Wait for results panel to load
-            try:
-                await page.wait_for_selector('div[role="feed"]', timeout=10000)
-            except:
-                logger.warning("Results feed not found, trying alternative selector")
-                await asyncio.sleep(2)
+            await page.goto(url, timeout=45000, wait_until='domcontentloaded')
+            await asyncio.sleep(random.uniform(3, 6))  # Anti-blocking delay
+            
+            # Wait for results panel with fallback selectors
+            feed_selectors = [
+                'div[role="feed"]',
+                'div[role="list"]',
+                'div.m6QErb',  # Google Maps results container
+                '[data-value="Search results"]'
+            ]
+            
+            feed = None
+            for selector in feed_selectors:
+                try:
+                    await page.wait_for_selector(selector, timeout=8000)
+                    feed = await page.query_selector(selector)
+                    if feed:
+                        logger.info(f"Found results container with selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not feed:
+                logger.warning("Results feed not found with any selector, trying to proceed anyway")
+                await asyncio.sleep(3)
             
             # Scroll to load more results
             scroll_count = 0
-            max_scrolls = 10
+            max_scrolls = 12
             prev_count = 0
+            no_new_results_count = 0
             
             while scroll_count < max_scrolls and len(results) < max_results:
-                # Find the scrollable container
-                feed = await page.query_selector('div[role="feed"]')
+                # Find the scrollable container with fallback
+                for selector in feed_selectors:
+                    feed = await page.query_selector(selector)
+                    if feed:
+                        break
+                
                 if feed:
-                    # Scroll down
-                    await page.evaluate('''
-                        (element) => {
-                            element.scrollTop = element.scrollHeight;
-                        }
+                    # Scroll with human-like behavior
+                    scroll_amount = random.randint(300, 600)
+                    await page.evaluate(f'''
+                        (element) => {{
+                            element.scrollBy({{ top: {scroll_amount}, behavior: 'smooth' }});
+                        }}
                     ''', feed)
                 
-                await asyncio.sleep(random.uniform(1.5, 3))  # Wait for content to load
+                # Random delay between scrolls
+                await asyncio.sleep(random.uniform(SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX * 1.5))
                 
-                # Extract business links
-                elements = await page.query_selector_all('a[href*="/maps/place/"]')
+                # Extract business links with multiple selectors
+                link_selectors = [
+                    'a[href*="/maps/place/"]',
+                    'a.hfpxzc',  # Direct place link class
+                    'div[role="article"] a[href*="place"]'
+                ]
+                
+                elements = []
+                for selector in link_selectors:
+                    try:
+                        found = await page.query_selector_all(selector)
+                        if found:
+                            elements = found
+                            break
+                    except:
+                        continue
                 
                 for el in elements:
                     try:
@@ -81,15 +185,13 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
                         name = await el.get_attribute('aria-label')
                         
                         if href and name:
-                            # Extract place_id from URL
-                            # Format: /maps/place/Name/@lat,lng,zoom/data=...
                             place_id = extract_place_id(href)
                             
-                            # Check for duplicates
-                            if place_id and not any(r['place_id'] == place_id for r in results):
+                            # Validate place_id
+                            if place_id and len(place_id) > 3 and not any(r['place_id'] == place_id for r in results):
                                 results.append({
                                     "place_id": place_id,
-                                    "name": name,
+                                    "name": clean_business_name(name),
                                     "maps_url": href if href.startswith('http') else f"https://www.google.com{href}",
                                     "lat": lat,
                                     "lng": lng
@@ -98,20 +200,35 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
                         logger.debug(f"Error extracting element: {e}")
                         continue
                 
-                # Check if we got new results
+                # Check progress
                 if len(results) == prev_count:
-                    scroll_count += 1  # No new results, increment scroll count
+                    no_new_results_count += 1
+                    if no_new_results_count >= 3:
+                        scroll_count += 1
+                        no_new_results_count = 0
                 else:
-                    scroll_count = 0  # Reset if we found new results
-                    prev_count = len(results)
+                    no_new_results_count = 0
+                    scroll_count = 0
                 
-                logger.info(f"Scroll iteration: found {len(results)} businesses so far")
+                prev_count = len(results)
+                logger.info(f"Scroll {scroll_count}/{max_scrolls}: found {len(results)} businesses")
                 
-                # Check for "end of results" indicator
-                end_text = await page.query_selector('text="You\'ve reached the end of the list"')
-                if end_text:
-                    logger.info("Reached end of results")
-                    break
+                # Check for "end of results" indicators
+                end_indicators = [
+                    'text="You\'ve reached the end of the list"',
+                    'text="No more results"',
+                    'div.HlvSq'  # End of list div
+                ]
+                
+                for indicator in end_indicators:
+                    try:
+                        end_elem = await page.query_selector(indicator)
+                        if end_elem:
+                            logger.info("Reached end of results")
+                            scroll_count = max_scrolls
+                            break
+                    except:
+                        continue
             
             logger.info(f"Completed scraping: {len(results)} businesses found")
             
@@ -121,6 +238,16 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
             await browser.close()
     
     return results
+
+
+def clean_business_name(name: str) -> str:
+    """Clean and normalize business name."""
+    if not name:
+        return ""
+    # Remove common suffixes that might be in the name
+    name = re.sub(r'\s*\·\s*.*$', '', name)  # Remove everything after ·
+    name = re.sub(r'\s+', ' ', name).strip()  # Normalize whitespace
+    return name[:200]  # Limit length
 
 def extract_place_id(url: str) -> str:
     """Extract a unique identifier from the Google Maps URL"""

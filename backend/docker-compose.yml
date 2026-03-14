@@ -45,9 +45,15 @@ services:
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=true
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://dashboardforrksinfra.run.place,http://localhost:3000}
     volumes:
       - .:/app
-      - demo_sites:/app/demo_sites
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   worker_discovery:
     build:
@@ -64,6 +70,12 @@ services:
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "from redis import Redis; r=Redis.from_url('redis://redis:6379/0'); r.ping(); import rq; workers=rq.Worker.all(connection=r); assert any(w.state != 'idle' or True for w in workers), 'no workers'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 2
 
@@ -82,6 +94,12 @@ services:
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "from redis import Redis; Redis.from_url('redis://redis:6379/0').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 6
 
@@ -100,29 +118,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - .:/app
-    deploy:
-      replicas: 2
-
-  worker_demo:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: rq worker demo --url redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - .:/app
-      - demo_sites:/app/demo_sites
+    healthcheck:
+      test: ["CMD", "python", "-c", "from redis import Redis; Redis.from_url('redis://redis:6379/0').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 2
 
 volumes:
   postgres_data:
   redis_data:
-  demo_sites:

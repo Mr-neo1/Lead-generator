@@ -3,6 +3,11 @@ import asyncio
 import logging
 from typing import Optional, List
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ROOT_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ROOT_ENV_FILE)
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +86,7 @@ def format_lead_message(lead: dict) -> str:
 🏷️ Type: {lead.get('type', 'UNKNOWN')}
 📊 Score: {lead.get('score', 0)}/10
 """
-    
-    if lead.get('demo_url'):
-        msg += f"\n🖼️ Demo: {lead.get('demo_url')}"
-    
+
     return msg
 
 async def notify_high_value_lead(lead: dict, min_score: int = 5) -> bool:

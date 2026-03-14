@@ -18,6 +18,8 @@ print_warning() {
     echo -e "${YELLOW}[!]${NC} $1"
 }
 
+DOMAIN=${DOMAIN:-dashboardforrksinfra.run.place}
+
 # Step 1: System Update
 echo ""
 echo "Step 1: Updating system..."
@@ -60,21 +62,28 @@ else
 fi
 print_status "Repository ready"
 
-# Step 6: Setup Backend
+# Step 6: Setup Environment and Backend
 echo ""
-echo "Step 6: Setting up Backend..."
+echo "Step 6: Setting up environment and backend..."
 cd /root/Lead-generator/backend
 
-# Create .env file
-cat > .env << 'EOF'
+# Create single root .env file
+cat > /root/Lead-generator/.env << EOF
+NEXT_PUBLIC_API_URL=https://${DOMAIN}
+APP_URL=https://${DOMAIN}
+APP_LOGIN_USERNAME=admin
+APP_LOGIN_PASSWORD=change-me
+APP_LOGIN_SECRET=replace-with-a-long-random-secret
 DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
 REDIS_URL=redis://redis:6379/0
 USE_REDIS=true
-TELEGRAM_BOT_TOKEN=8494513906:AAHi-b3iDkRwP6IthiW6Aw4b-STrZhLliP8
-TELEGRAM_CHAT_ID=1082069915
+API_KEY=
+CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 EOF
 
-print_status "Backend .env created"
+print_status "Root .env created"
 
 # Start backend with Docker
 echo "Building and starting backend containers (this may take 5-10 minutes)..."
@@ -101,16 +110,6 @@ done
 echo ""
 echo "Step 7: Setting up Frontend..."
 cd /root/Lead-generator
-
-# Get VPS public IP
-VPS_IP=$(curl -s ifconfig.me)
-
-# Create frontend .env
-cat > .env.local << EOF
-NEXT_PUBLIC_API_URL=http://${VPS_IP}:8000
-EOF
-
-print_status "Frontend .env.local created with API URL: http://${VPS_IP}:8000"
 
 # Install dependencies and build
 echo "Installing frontend dependencies..."
@@ -139,9 +138,9 @@ echo "=========================================="
 echo ""
 echo "Your Lead Generator is now running:"
 echo ""
-echo -e "  ${GREEN}Dashboard:${NC}  http://${VPS_IP}:3000"
-echo -e "  ${GREEN}API Docs:${NC}   http://${VPS_IP}:8000/docs"
-echo -e "  ${GREEN}API Health:${NC} http://${VPS_IP}:8000/"
+echo -e "  ${GREEN}Dashboard:${NC}  https://${DOMAIN}"
+echo -e "  ${GREEN}API Docs:${NC}   https://${DOMAIN}/docs"
+echo -e "  ${GREEN}API Health:${NC} https://${DOMAIN}/health"
 echo ""
 echo "Useful commands:"
 echo "  - View frontend logs:  pm2 logs leads-frontend"
@@ -149,5 +148,5 @@ echo "  - View backend logs:   cd /root/Lead-generator/backend && docker compose
 echo "  - Restart frontend:    pm2 restart leads-frontend"
 echo "  - Restart backend:     cd /root/Lead-generator/backend && docker compose -f docker-compose.light.yml restart"
 echo ""
-echo "Telegram notifications are configured and will alert you for high-value leads!"
+echo "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in /root/Lead-generator/.env if needed."
 echo ""

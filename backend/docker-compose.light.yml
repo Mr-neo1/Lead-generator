@@ -37,6 +37,7 @@ services:
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379
       - USE_REDIS=true
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://dashboardforrksinfra.run.place,http://localhost:3000}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     depends_on:
@@ -65,6 +66,12 @@ services:
         condition: service_healthy
     # Process all queues with one worker (demo queue excluded since disabled)
     command: rq worker discovery details analysis --url redis://redis:6379
+    healthcheck:
+      test: ["CMD", "python", "-c", "from redis import Redis; Redis.from_url('redis://redis:6379').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 2
       resources:

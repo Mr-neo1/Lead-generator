@@ -16,7 +16,7 @@ This starts:
 - **PostgreSQL** database on port 5432
 - **Redis** queue on port 6379
 - **FastAPI** backend on port 8000
-- **12 Worker processes** (2 discovery, 6 details, 2 analysis, 2 demo)
+- **10 Worker processes** (2 discovery, 6 details, 2 analysis)
 
 ### 2. Start Frontend
 ```bash
@@ -30,7 +30,6 @@ Frontend runs on http://localhost:3000
 ### 3. Access the System
 - **Dashboard**: http://localhost:3000
 - **API Docs**: http://localhost:8000/docs
-- **Demo Sites**: http://localhost:8000/demo-sites/
 
 ---
 
@@ -47,7 +46,6 @@ Frontend runs on http://localhost:3000
 - `GET /api/leads` - Get all leads
 - `GET /api/leads/{lead_id}` - Get lead details
 - `GET /api/leads/export?lead_type=NO_WEBSITE&min_score=5` - Export as CSV
-- `POST /api/leads/{lead_id}/generate-demo` - Generate demo site
 
 ### System
 - `GET /api/stats` - Dashboard statistics
@@ -81,10 +79,6 @@ worker_details:
 worker_analysis:
   deploy:
     replicas: 2
-
-worker_demo:
-  deploy:
-    replicas: 2
 ```
 
 ---
@@ -107,24 +101,24 @@ worker_demo:
 ┌────────────────────────────▼─────────────────────────────────┐
 │                    Redis Queue                                │
 │                                                              │
-│  Queues: discovery → details → analysis → demo               │
+│  Queues: discovery → details → analysis                       │
 └────────────────────────────┬─────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────┐
 │                    RQ Workers                                 │
 │                                                              │
-│  Discovery (2x) → Details (6x) → Analysis (2x) → Demo (2x)  │
+│  Discovery (2x) → Details (6x) → Analysis (2x)               │
 │                                                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌────────────┐           │
-│  │ Playwright  │  │   aiohttp   │  │  Generate  │           │
-│  │   Browser   │  │   Requests  │  │    HTML    │           │
-│  └─────────────┘  └─────────────┘  └────────────┘           │
+│  ┌─────────────┐  ┌─────────────┐                             │
+│  │ Playwright  │  │   aiohttp   │                             │
+│  │   Browser   │  │   Requests  │                             │
+│  └─────────────┘  └─────────────┘                             │
 └────────────────────────────┬─────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────┐
 │                   PostgreSQL Database                         │
 │                                                              │
-│  Tables: businesses, lead_analysis, demo_sites, scraping_jobs│
+│  Tables: businesses, lead_analysis, scraping_jobs            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -148,12 +142,6 @@ worker_demo:
 - Checks website SSL, mobile-friendliness, load time
 - Calculates lead score (0-8)
 - Classifies lead type: NO_WEBSITE, WEBSITE_REDESIGN, NORMAL
-- High-score leads (≥6) queued for demo generation
-
-### Stage 4: Demo Generation
-- Creates professional HTML demo site
-- Tailored to business category
-- Stored in /demo-sites/
 
 ---
 
@@ -178,7 +166,6 @@ High Priority: Score ≥ 6
 |--------|----------------|
 | Businesses scraped | 10,000 - 25,000 |
 | Qualified leads | 3,000 - 8,000 |
-| Demo sites generated | 500 - 2,000 |
 
 ---
 

@@ -43,7 +43,6 @@ echo.
 echo  Dashboard:    http://localhost:3000
 echo  API:          http://localhost:8000
 echo  API Docs:     http://localhost:8000/docs
-echo  Demo Sites:   http://localhost:8000/demo-sites/
 echo.
 echo  To view logs: docker-compose logs -f
 echo  To stop:      docker-compose down

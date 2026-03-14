@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies for Playwright
 RUN apt-get update && apt-get install -y \
     wget \
+    curl \
     gnupg \
     libglib2.0-0 \
     libnss3 \
@@ -41,9 +42,10 @@ RUN playwright install chromium
 # Copy application code
 COPY . .
 
-# Create demo_sites directory
-RUN mkdir -p demo_sites
-
 EXPOSE 8000
+
+# Health check - check every 30s, timeout after 10s, fail after 3 retries
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

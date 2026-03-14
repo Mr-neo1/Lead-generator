@@ -1,13 +1,14 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-import { Sidebar } from '@/components/sidebar';
-import { Header } from '@/components/header';
+import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from 'sonner';
+import { AppShell } from '@/components/app-shell';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Automated Lead Engine',
+  title: 'Lead Engine - Automated Lead Generation',
   description: 'Dashboard for managing Google Maps scraping jobs, analyzing leads, and generating demo websites.',
 };
 
@@ -17,19 +18,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className} suppressHydrationWarning>
-        <div className="h-full relative">
-          <div className="hidden h-full md:flex md:w-72 md:flex-col md:fixed md:inset-y-0 z-[80] bg-zinc-900">
-            <Sidebar />
-          </div>
-          <main className="md:pl-72 bg-zinc-50 min-h-screen">
-            <Header />
-            <div className="p-8">
-              {children}
-            </div>
-          </main>
-        </div>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <AppShell>{children}</AppShell>
+          <Toaster richColors position="top-right" />
+        </ThemeProvider>
       </body>
     </html>
   );

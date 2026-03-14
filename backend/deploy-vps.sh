@@ -6,6 +6,9 @@ set -e
 
 echo "=== Lead Engine VPS Deployment ==="
 
+APP_DOMAIN=${APP_DOMAIN:-dashboardforrksinfra.run.place}
+export CORS_ORIGINS=${CORS_ORIGINS:-https://${APP_DOMAIN},http://localhost:3000}
+
 # Check minimum RAM (2GB = 2097152 KB)
 TOTAL_RAM=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 if [ "$TOTAL_RAM" -lt 2000000 ]; then
@@ -47,6 +50,8 @@ docker compose -f docker-compose.light.yml up -d --build
 echo ""
 echo "=== Deployment Complete ==="
 echo "API: http://$(hostname -I | awk '{print $1}'):8000"
+echo "CORS_ORIGINS=${CORS_ORIGINS}"
+echo "Set NEXT_PUBLIC_API_URL=https://${APP_DOMAIN} in the root .env for frontend deploys."
 echo ""
 echo "Commands:"
 echo "  View logs:    docker compose -f docker-compose.light.yml logs -f"

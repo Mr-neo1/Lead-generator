@@ -1,31 +1,93 @@
+"""
+RQ Task Queue Workers with retry mechanism and improved error handling.
+"""
+
 import asyncio
 import logging
+import json
+import time
+import random
+from functools import wraps
 from database import SessionLocal
-from models import Business, LeadAnalysis, DemoSite, ScrapingJob
+from models import Business, LeadAnalysis, ScrapingJob, Blacklist, JobLog
 from discovery_scraper import scrape_google_maps_grid
 from detail_fetcher import fetch_place_details
 from website_analyzer import analyze_website, calculate_lead_score, determine_lead_type
-from demo_generator import generate_demo_site
 from redis import Redis
-from rq import Queue, get_current_job
+from rq import Queue, get_current_job, Retry
 import os
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# Redis connection
 redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 q_details = Queue('details', connection=redis_conn)
 q_analysis = Queue('analysis', connection=redis_conn)
-q_demo = Queue('demo', connection=redis_conn)
 
-def update_job_status(job_id: str, status: str):
-    """Update the status of a scraping job"""
+# Retry configuration
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+RETRY_DELAYS = [60, 300, 900]  # 1 min, 5 min, 15 min
+
+
+def retry_with_backoff(func):
+    """Decorator for retry with exponential backoff."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        job = get_current_job()
+        retry_count = job.meta.get('retry_count', 0) if job else 0
+        
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if retry_count < MAX_RETRIES:
+                delay = RETRY_DELAYS[min(retry_count, len(RETRY_DELAYS) - 1)]
+                # Add jitter to prevent thundering herd
+                delay += random.uniform(0, delay * 0.1)
+                
+                logger.warning(f"Retry {retry_count + 1}/{MAX_RETRIES} for {func.__name__} in {delay}s: {e}")
+                
+                if job:
+                    job.meta['retry_count'] = retry_count + 1
+                    job.save_meta()
+                
+                raise  # Let RQ handle the retry
+            else:
+                logger.error(f"Max retries exceeded for {func.__name__}: {e}")
+                raise
+    return wrapper
+
+
+def log_to_job(job_id: str, level: str, message: str, details: dict = None):
+    """Log a message to the job_logs table."""
+    try:
+        db = SessionLocal()
+        log_entry = JobLog(
+            job_id=job_id,
+            level=level,
+            message=message,
+            details=json.dumps(details) if details else None
+        )
+        db.add(log_entry)
+        db.commit()
+        db.close()
+    except Exception as e:
+        logger.error(f"Failed to log to job {job_id}: {e}")
+
+
+def update_job_status(job_id: str, status: str, error_message: str = None):
+    """Update the status of a scraping job."""
     db = SessionLocal()
     try:
         job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
         if job:
             job.status = status
+            if error_message:
+                job.error_message = error_message
             db.commit()
             logger.info(f"Job {job_id} status updated to {status}")
     except Exception as e:
@@ -33,32 +95,70 @@ def update_job_status(job_id: str, status: str):
     finally:
         db.close()
 
-def increment_job_progress(job_id: str, new_leads: int = 0):
-    """Increment job progress and check if completed"""
+
+def increment_job_progress(job_id: str, new_leads: int = 0, failed: bool = False):
+    """Increment job progress and check if completed."""
     db = SessionLocal()
     try:
         job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
         if job:
-            job.completed_tasks = (job.completed_tasks or 0) + 1
+            if job.status == "cancelled":
+                logger.info(f"Job {job_id} was cancelled, skipping progress update")
+                return False
+            
+            if failed:
+                job.failed_tasks = (job.failed_tasks or 0) + 1
+            else:
+                job.completed_tasks = (job.completed_tasks or 0) + 1
+            
             job.leads_found = (job.leads_found or 0) + new_leads
             
             # Check if all tasks are completed
-            if job.total_tasks > 0 and job.completed_tasks >= job.total_tasks:
-                job.status = "completed"
-                logger.info(f"Job {job_id} completed! Found {job.leads_found} leads.")
+            total_done = (job.completed_tasks or 0) + (job.failed_tasks or 0)
+            if job.total_tasks > 0 and total_done >= job.total_tasks:
+                if job.failed_tasks > 0 and job.failed_tasks == job.total_tasks:
+                    job.status = "failed"
+                    job.error_message = "All tasks failed"
+                else:
+                    job.status = "completed"
+                logger.info(f"Job {job_id} finished! Status: {job.status}, Found: {job.leads_found}")
             
             db.commit()
-            logger.info(f"Job {job_id} progress: {job.completed_tasks}/{job.total_tasks}")
+            logger.info(f"Job {job_id} progress: {job.completed_tasks}/{job.total_tasks} (failed: {job.failed_tasks})")
+            return True
     except Exception as e:
         logger.error(f"Error updating job progress: {e}")
     finally:
         db.close()
+    return False
 
+
+def is_blacklisted(db, place_id: str = None, phone: str = None) -> bool:
+    """Check if a place_id or phone is blacklisted."""
+    if place_id:
+        if db.query(Blacklist).filter(Blacklist.value == place_id, Blacklist.type == "place_id").first():
+            return True
+    if phone:
+        if db.query(Blacklist).filter(Blacklist.value == phone, Blacklist.type == "phone").first():
+            return True
+    return False
+
+
+@retry_with_backoff
 def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
     """
-    Stage 1: Discover businesses from Google Maps for a specific coordinate
+    Stage 1: Discover businesses from Google Maps for a specific coordinate.
     """
     logger.info(f"[Discovery] Starting for job {job_id}: {keyword} at ({lat}, {lng})")
+    
+    # Check if job is cancelled
+    db = SessionLocal()
+    job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+    if job and job.status == "cancelled":
+        logger.info(f"[Discovery] Job {job_id} cancelled, skipping")
+        db.close()
+        return {"job_id": job_id, "status": "cancelled"}
+    db.close()
     
     try:
         # Run async playwright in sync RQ worker
@@ -67,9 +167,15 @@ def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
         
         db = SessionLocal()
         new_count = 0
+        skipped_count = 0
         
         for res in results:
             try:
+                # Check blacklist
+                if is_blacklisted(db, place_id=res['place_id']):
+                    skipped_count += 1
+                    continue
+                
                 # Deduplication check
                 exists = db.query(Business).filter(Business.place_id == res['place_id']).first()
                 if not exists:
@@ -78,37 +184,53 @@ def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
                         name=res['name'],
                         maps_url=res['maps_url'],
                         lat=res['lat'],
-                        lng=res['lng']
+                        lng=res['lng'],
+                        source_job_id=job_id,
+                        status="new"
                     )
                     db.add(new_biz)
                     db.commit()
                     db.refresh(new_biz)
                     new_count += 1
                     
-                    # Queue next stage
-                    q_details.enqueue(run_details_fetch, new_biz.id, new_biz.maps_url)
+                    # Queue next stage with retry
+                    q_details.enqueue(
+                        run_details_fetch, 
+                        new_biz.id, 
+                        new_biz.maps_url,
+                        retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
+                    )
                     logger.info(f"[Discovery] Queued details fetch for: {new_biz.name}")
             except Exception as e:
                 logger.error(f"[Discovery] Error saving business: {e}")
                 db.rollback()
-                
+        
         db.close()
+        
+        # Log progress
+        log_to_job(job_id, "INFO", f"Discovery completed at ({lat}, {lng})", {
+            "found": len(results),
+            "new": new_count,
+            "skipped": skipped_count
+        })
         
         # Update job progress
         increment_job_progress(job_id, new_count)
         
-        logger.info(f"[Discovery] Completed: {new_count} new businesses added")
+        logger.info(f"[Discovery] Completed: {new_count} new, {skipped_count} skipped")
         return {"job_id": job_id, "new_businesses": new_count}
         
     except Exception as e:
         logger.error(f"[Discovery] Error: {e}")
-        # Still increment progress even on error so job can complete
-        increment_job_progress(job_id, 0)
+        log_to_job(job_id, "ERROR", f"Discovery failed at ({lat}, {lng})", {"error": str(e)})
+        increment_job_progress(job_id, 0, failed=True)
         raise
 
+
+@retry_with_backoff
 def run_details_fetch(business_id: int, maps_url: str):
     """
-    Stage 2: Fetch detailed business information from the Maps page
+    Stage 2: Fetch detailed business information from the Maps page.
     """
     logger.info(f"[Details] Fetching details for business {business_id}")
     
@@ -118,6 +240,25 @@ def run_details_fetch(business_id: int, maps_url: str):
         biz = db.query(Business).filter(Business.id == business_id).first()
         
         if biz:
+            # Check if phone is blacklisted
+            if details.get('phone') and is_blacklisted(db, phone=details.get('phone')):
+                biz.is_blacklisted = True
+                db.commit()
+                logger.info(f"[Details] Business {biz.name} blacklisted by phone")
+                db.close()
+                return {"business_id": business_id, "blacklisted": True}
+            
+            # Phone deduplication - check if another business has same phone
+            if details.get('phone'):
+                existing_with_phone = db.query(Business).filter(
+                    Business.phone == details.get('phone'),
+                    Business.id != business_id
+                ).first()
+                if existing_with_phone:
+                    logger.info(f"[Details] Phone duplicate found, skipping: {details.get('phone')}")
+                    # Don't save phone, but continue with other details
+                    details['phone'] = None
+            
             biz.website = details.get('website')
             biz.phone = details.get('phone')
             biz.rating = details.get('rating')
@@ -128,14 +269,15 @@ def run_details_fetch(business_id: int, maps_url: str):
             
             logger.info(f"[Details] Updated: {biz.name} - Website: {biz.website}, Phone: {biz.phone}")
             
-            # Queue next stage
+            # Queue next stage with retry
             q_analysis.enqueue(
                 run_analysis, 
                 business_id, 
                 details.get('website'), 
                 details.get('rating'), 
                 details.get('reviews'), 
-                details.get('phone')
+                details.get('phone'),
+                retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
             )
         
         db.close()
@@ -145,15 +287,23 @@ def run_details_fetch(business_id: int, maps_url: str):
         logger.error(f"[Details] Error fetching details for {business_id}: {e}")
         raise
 
+
+@retry_with_backoff
 def run_analysis(business_id: int, website: str, rating: float, reviews: int, phone: str):
     """
-    Stage 3: Analyze the business website and score the lead
+    Stage 3: Analyze the business website and score the lead.
     """
     logger.info(f"[Analysis] Analyzing business {business_id}")
     
     try:
         analysis_data = asyncio.run(analyze_website(website))
         db = SessionLocal()
+        
+        # Get scoring thresholds from environment (with defaults)
+        no_website_score = int(os.getenv("NO_WEBSITE_SCORE", "4"))
+        high_rating_score = int(os.getenv("HIGH_RATING_SCORE", "2"))
+        high_reviews_score = int(os.getenv("HIGH_REVIEWS_SCORE", "1"))
+        has_phone_score = int(os.getenv("HAS_PHONE_SCORE", "1"))
         
         has_website = bool(website)
         score = calculate_lead_score(has_website, rating, reviews, bool(phone))
@@ -181,12 +331,24 @@ def run_analysis(business_id: int, website: str, rating: float, reviews: int, ph
         db.commit()
         logger.info(f"[Analysis] Scored: business {business_id}, type={lead_type}, score={score}")
         
-        # Demo generation disabled - uncomment below if you want auto-generated demo sites
-        # if score >= 6:
-        #     biz = db.query(Business).filter(Business.id == business_id).first()
-        #     if biz:
-        #         q_demo.enqueue(run_demo_generation, business_id, biz.name, biz.category)
-        #         logger.info(f"[Analysis] Queued demo generation for high-score lead: {biz.name}")
+        # Optionally send Telegram notification for high-value leads
+        if score >= 6 and lead_type == "NO_WEBSITE":
+            try:
+                from telegram_bot import notify_high_value_lead
+                biz = db.query(Business).filter(Business.id == business_id).first()
+                if biz:
+                    asyncio.run(notify_high_value_lead({
+                        "name": biz.name,
+                        "phone": biz.phone,
+                        "website": biz.website,
+                        "rating": biz.rating,
+                        "reviews": biz.reviews,
+                        "address": biz.address,
+                        "type": lead_type,
+                        "score": score
+                    }))
+            except Exception as e:
+                logger.warning(f"[Analysis] Failed to send Telegram notification: {e}")
         
         db.close()
         return {"business_id": business_id, "lead_type": lead_type, "score": score}
@@ -195,32 +357,28 @@ def run_analysis(business_id: int, website: str, rating: float, reviews: int, ph
         logger.error(f"[Analysis] Error analyzing business {business_id}: {e}")
         raise
 
-def run_demo_generation(business_id: int, name: str, category: str):
-    """
-    Stage 4: Generate a demo website for high-priority leads
-    """
-    logger.info(f"[Demo] Generating demo for: {name}")
-    
+
+def cleanup_cancelled_jobs():
+    """Cleanup task: mark old running jobs as failed if no progress."""
+    logger.info("[Cleanup] Checking for stale jobs...")
+    db = SessionLocal()
     try:
-        db = SessionLocal()
+        from datetime import datetime, timedelta
+        stale_threshold = datetime.now() - timedelta(hours=6)
         
-        # Check if demo already exists
-        existing = db.query(DemoSite).filter(DemoSite.business_id == business_id).first()
-        if existing:
-            logger.info(f"[Demo] Demo already exists for {name}")
-            db.close()
-            return {"business_id": business_id, "demo_url": existing.demo_url}
+        stale_jobs = db.query(ScrapingJob).filter(
+            ScrapingJob.status == "running",
+            ScrapingJob.updated_at < stale_threshold
+        ).all()
         
-        demo_url = generate_demo_site(name, category or "Business")
+        for job in stale_jobs:
+            job.status = "failed"
+            job.error_message = "Job stalled - no progress for 6 hours"
+            log_to_job(job.job_id, "ERROR", "Job marked as failed due to inactivity")
         
-        demo = DemoSite(business_id=business_id, demo_url=demo_url)
-        db.add(demo)
         db.commit()
-        
-        logger.info(f"[Demo] Generated: {demo_url}")
-        db.close()
-        return {"business_id": business_id, "demo_url": demo_url}
-        
+        logger.info(f"[Cleanup] Marked {len(stale_jobs)} stale jobs as failed")
     except Exception as e:
-        logger.error(f"[Demo] Error generating demo for {name}: {e}")
-        raise
+        logger.error(f"[Cleanup] Error: {e}")
+    finally:
+        db.close()

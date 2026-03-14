@@ -1,0 +1,55 @@
+---
+# Pre-commit hooks for Lead Engine
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # ── General file hygiene ──────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ["--branch", "main", "--branch", "master"]
+
+  # ── Python: ruff (lint + format) ─────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  # ── TypeScript / JS: eslint ───────────────────────────────
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        language: node
+        entry: npx eslint
+        args: ["--fix", "--max-warnings=0"]
+        types_or: [javascript, jsx, ts, tsx]
+        files: ^(app|components|hooks|lib)/
+        pass_filenames: true
+        additional_dependencies:
+          - eslint@9.39.1
+          - eslint-config-next@16.0.8
+          - typescript@5.9.3
+
+  # ── Secret detection ──────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: (requirements\.txt|package\.json)
