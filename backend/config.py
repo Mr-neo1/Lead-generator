@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         description="API key for authentication (leave empty to disable)"
     )
     cors_origins: str = Field(
-        default="https://dashboardforrksinfra.run.place,http://localhost:3000",
+        default="https://leadscraper.freelancleadsapp.tech,http://localhost:3000",
         description="Comma-separated list of allowed CORS origins"
     )
     
