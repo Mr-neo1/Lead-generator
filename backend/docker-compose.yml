@@ -42,10 +42,11 @@ services:
       redis:
         condition: service_healthy
     environment:
+      - API_KEY=${API_KEY}
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=true
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://dashboardforrksinfra.run.place,http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://leadscraper.freelanceleadsapp.tech,http://localhost:3000}
     volumes:
       - .:/app
     healthcheck:
@@ -66,6 +67,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      - API_KEY=${API_KEY}
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379/0
     volumes:
@@ -90,6 +92,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      - API_KEY=${API_KEY}
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379/0
     volumes:
@@ -114,6 +117,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      - API_KEY=${API_KEY}
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379/0
     volumes:
