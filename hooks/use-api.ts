@@ -3,9 +3,23 @@
 import useSWR, { mutate } from "swr"
 import { API_URL } from "@/lib/config"
 
-// Generic fetcher
+// Get API key from environment (set during build)
+const API_KEY = typeof window !== "undefined"
+  ? (process.env.NEXT_PUBLIC_API_KEY || "")
+  : ""
+
+// Common headers for all API requests
+function getHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra }
+  if (API_KEY) {
+    headers["X-API-Key"] = API_KEY
+  }
+  return headers
+}
+
+// Generic fetcher with API key
 const fetcher = async (url: string) => {
-  const res = await fetch(url)
+  const res = await fetch(url, { headers: getHeaders() })
   if (!res.ok) {
     const error = new Error("An error occurred while fetching the data.")
     throw error
@@ -63,7 +77,7 @@ export function useLeads(params: LeadsParams = {}) {
   queryParams.set("page", page.toString())
   queryParams.set("page_size", pageSize.toString())
   if (leadType && leadType !== "ALL") queryParams.set("lead_type", leadType)
-  if (minScore) queryParams.set("min_score", minScore.toString())
+  if (minScore !== undefined && minScore !== null) queryParams.set("min_score", minScore.toString())
   if (category) queryParams.set("category", category)
   if (status && status !== "ALL") queryParams.set("status", status)
   if (search) queryParams.set("search", search)
@@ -165,7 +179,7 @@ export async function createJob(data: {
 }) {
   const res = await fetch(`${API_URL}/api/jobs`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(data)
   })
   
@@ -174,49 +188,52 @@ export async function createJob(data: {
   }
   
   // Invalidate jobs cache
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
   
   return res.json()
 }
 
 export async function deleteJob(jobId: string) {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: getHeaders()
   })
   
   if (!res.ok) {
     throw new Error("Failed to delete job")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
   
   return res.json()
 }
 
 export async function cancelJob(jobId: string) {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}/cancel`, {
-    method: "POST"
+    method: "POST",
+    headers: getHeaders()
   })
   
   if (!res.ok) {
     throw new Error("Failed to cancel job")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
   
   return res.json()
 }
 
 export async function restartJob(jobId: string) {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}/restart`, {
-    method: "POST"
+    method: "POST",
+    headers: getHeaders()
   })
   
   if (!res.ok) {
     throw new Error("Failed to restart job")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/jobs`))
   
   return res.json()
 }
@@ -229,7 +246,7 @@ export async function updateLead(leadId: number, data: {
 }) {
   const res = await fetch(`${API_URL}/api/leads/${leadId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: getHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(data)
   })
   
@@ -237,21 +254,22 @@ export async function updateLead(leadId: number, data: {
     throw new Error("Failed to update lead")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
   
   return res.json()
 }
 
 export async function deleteLead(leadId: number) {
   const res = await fetch(`${API_URL}/api/leads/${leadId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: getHeaders()
   })
   
   if (!res.ok) {
     throw new Error("Failed to delete lead")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
   
   return res.json()
 }
@@ -259,7 +277,7 @@ export async function deleteLead(leadId: number) {
 export async function bulkDeleteLeads(leadIds: number[]) {
   const res = await fetch(`${API_URL}/api/leads/bulk-delete`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ lead_ids: leadIds })
   })
   
@@ -267,7 +285,7 @@ export async function bulkDeleteLeads(leadIds: number[]) {
     throw new Error("Failed to delete leads")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
   
   return res.json()
 }
@@ -279,7 +297,7 @@ export async function bulkUpdateLeads(leadIds: number[], data: {
 }) {
   const res = await fetch(`${API_URL}/api/leads/bulk-update`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ lead_ids: leadIds, ...data })
   })
   
@@ -287,14 +305,15 @@ export async function bulkUpdateLeads(leadIds: number[], data: {
     throw new Error("Failed to update leads")
   }
   
-  mutate((key: string) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
+  mutate((key: unknown) => typeof key === "string" && key.startsWith(`${API_URL}/api/leads`))
   
   return res.json()
 }
 
 export async function seedDemoData() {
   const res = await fetch(`${API_URL}/api/seed`, {
-    method: "POST"
+    method: "POST",
+    headers: getHeaders()
   })
   
   if (!res.ok) {
@@ -310,7 +329,7 @@ export async function seedDemoData() {
 // Health check
 export async function checkHealth() {
   try {
-    const res = await fetch(`${API_URL}/health`)
+    const res = await fetch(`${API_URL}/health`, { headers: getHeaders() })
     if (!res.ok) {
       return null
     }

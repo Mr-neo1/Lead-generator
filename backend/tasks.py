@@ -64,8 +64,8 @@ def retry_with_backoff(func):
 
 def log_to_job(job_id: str, level: str, message: str, details: dict = None):
     """Log a message to the job_logs table."""
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         log_entry = JobLog(
             job_id=job_id,
             level=level,
@@ -74,9 +74,10 @@ def log_to_job(job_id: str, level: str, message: str, details: dict = None):
         )
         db.add(log_entry)
         db.commit()
-        db.close()
     except Exception as e:
         logger.error(f"Failed to log to job {job_id}: {e}")
+    finally:
+        db.close()
 
 
 def update_job_status(job_id: str, status: str, error_message: str = None):
@@ -153,59 +154,65 @@ def run_discovery(job_id: str, keyword: str, lat: float, lng: float):
     
     # Check if job is cancelled
     db = SessionLocal()
-    job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
-    if job and job.status == "cancelled":
-        logger.info(f"[Discovery] Job {job_id} cancelled, skipping")
+    try:
+        job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+        if job and job.status == "cancelled":
+            logger.info(f"[Discovery] Job {job_id} cancelled, skipping")
+            return {"job_id": job_id, "status": "cancelled"}
+    finally:
         db.close()
-        return {"job_id": job_id, "status": "cancelled"}
-    db.close()
     
     try:
         # Run async playwright in sync RQ worker
-        results = asyncio.run(scrape_google_maps_grid(keyword, lat, lng))
+        loop = asyncio.new_event_loop()
+        try:
+            results = loop.run_until_complete(scrape_google_maps_grid(keyword, lat, lng))
+        finally:
+            loop.close()
         logger.info(f"[Discovery] Found {len(results)} businesses at ({lat}, {lng})")
         
         db = SessionLocal()
         new_count = 0
         skipped_count = 0
         
-        for res in results:
-            try:
-                # Check blacklist
-                if is_blacklisted(db, place_id=res['place_id']):
-                    skipped_count += 1
-                    continue
-                
-                # Deduplication check
-                exists = db.query(Business).filter(Business.place_id == res['place_id']).first()
-                if not exists:
-                    new_biz = Business(
-                        place_id=res['place_id'],
-                        name=res['name'],
-                        maps_url=res['maps_url'],
-                        lat=res['lat'],
-                        lng=res['lng'],
-                        source_job_id=job_id,
-                        status="new"
-                    )
-                    db.add(new_biz)
-                    db.commit()
-                    db.refresh(new_biz)
-                    new_count += 1
+        try:
+            for res in results:
+                try:
+                    # Check blacklist
+                    if is_blacklisted(db, place_id=res['place_id']):
+                        skipped_count += 1
+                        continue
                     
-                    # Queue next stage with retry
-                    q_details.enqueue(
-                        run_details_fetch, 
-                        new_biz.id, 
-                        new_biz.maps_url,
-                        retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
-                    )
-                    logger.info(f"[Discovery] Queued details fetch for: {new_biz.name}")
-            except Exception as e:
-                logger.error(f"[Discovery] Error saving business: {e}")
-                db.rollback()
-        
-        db.close()
+                    # Deduplication check
+                    exists = db.query(Business).filter(Business.place_id == res['place_id']).first()
+                    if not exists:
+                        new_biz = Business(
+                            place_id=res['place_id'],
+                            name=res['name'],
+                            maps_url=res['maps_url'],
+                            lat=res['lat'],
+                            lng=res['lng'],
+                            source_job_id=job_id,
+                            status="new"
+                        )
+                        db.add(new_biz)
+                        db.commit()
+                        db.refresh(new_biz)
+                        new_count += 1
+                        
+                        # Queue next stage with retry
+                        q_details.enqueue(
+                            run_details_fetch, 
+                            new_biz.id, 
+                            new_biz.maps_url,
+                            retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
+                        )
+                        logger.info(f"[Discovery] Queued details fetch for: {new_biz.name}")
+                except Exception as e:
+                    logger.error(f"[Discovery] Error saving business: {e}")
+                    db.rollback()
+        finally:
+            db.close()
         
         # Log progress
         log_to_job(job_id, "INFO", f"Discovery completed at ({lat}, {lng})", {
@@ -235,52 +242,58 @@ def run_details_fetch(business_id: int, maps_url: str):
     logger.info(f"[Details] Fetching details for business {business_id}")
     
     try:
-        details = asyncio.run(fetch_place_details(maps_url))
+        loop = asyncio.new_event_loop()
+        try:
+            details = loop.run_until_complete(fetch_place_details(maps_url))
+        finally:
+            loop.close()
+        
         db = SessionLocal()
-        biz = db.query(Business).filter(Business.id == business_id).first()
-        
-        if biz:
-            # Check if phone is blacklisted
-            if details.get('phone') and is_blacklisted(db, phone=details.get('phone')):
-                biz.is_blacklisted = True
+        try:
+            biz = db.query(Business).filter(Business.id == business_id).first()
+            
+            if biz:
+                # Check if phone is blacklisted
+                if details.get('phone') and is_blacklisted(db, phone=details.get('phone')):
+                    biz.is_blacklisted = True
+                    db.commit()
+                    logger.info(f"[Details] Business {biz.name} blacklisted by phone")
+                    return {"business_id": business_id, "blacklisted": True}
+                
+                # Phone deduplication - check if another business has same phone
+                if details.get('phone'):
+                    existing_with_phone = db.query(Business).filter(
+                        Business.phone == details.get('phone'),
+                        Business.id != business_id
+                    ).first()
+                    if existing_with_phone:
+                        logger.info(f"[Details] Phone duplicate found, skipping: {details.get('phone')}")
+                        # Don't save phone, but continue with other details
+                        details['phone'] = None
+                
+                biz.website = details.get('website')
+                biz.phone = details.get('phone')
+                biz.rating = details.get('rating')
+                biz.reviews = details.get('reviews')
+                biz.category = details.get('category')
+                biz.address = details.get('address')
                 db.commit()
-                logger.info(f"[Details] Business {biz.name} blacklisted by phone")
-                db.close()
-                return {"business_id": business_id, "blacklisted": True}
-            
-            # Phone deduplication - check if another business has same phone
-            if details.get('phone'):
-                existing_with_phone = db.query(Business).filter(
-                    Business.phone == details.get('phone'),
-                    Business.id != business_id
-                ).first()
-                if existing_with_phone:
-                    logger.info(f"[Details] Phone duplicate found, skipping: {details.get('phone')}")
-                    # Don't save phone, but continue with other details
-                    details['phone'] = None
-            
-            biz.website = details.get('website')
-            biz.phone = details.get('phone')
-            biz.rating = details.get('rating')
-            biz.reviews = details.get('reviews')
-            biz.category = details.get('category')
-            biz.address = details.get('address')
-            db.commit()
-            
-            logger.info(f"[Details] Updated: {biz.name} - Website: {biz.website}, Phone: {biz.phone}")
-            
-            # Queue next stage with retry
-            q_analysis.enqueue(
-                run_analysis, 
-                business_id, 
-                details.get('website'), 
-                details.get('rating'), 
-                details.get('reviews'), 
-                details.get('phone'),
-                retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
-            )
+                
+                logger.info(f"[Details] Updated: {biz.name} - Website: {biz.website}, Phone: {biz.phone}")
+                
+                # Queue next stage with retry
+                q_analysis.enqueue(
+                    run_analysis, 
+                    business_id, 
+                    details.get('website'), 
+                    details.get('rating'), 
+                    details.get('reviews'), 
+                    details.get('phone'),
+                    retry=Retry(max=MAX_RETRIES, interval=RETRY_DELAYS)
+                )
+        finally:
+            db.close()
         
-        db.close()
         return {"business_id": business_id, "website": details.get('website')}
         
     except Exception as e:
@@ -296,61 +309,65 @@ def run_analysis(business_id: int, website: str, rating: float, reviews: int, ph
     logger.info(f"[Analysis] Analyzing business {business_id}")
     
     try:
-        analysis_data = asyncio.run(analyze_website(website))
+        loop = asyncio.new_event_loop()
+        try:
+            analysis_data = loop.run_until_complete(analyze_website(website))
+        finally:
+            loop.close()
+        
         db = SessionLocal()
+        try:
+            has_website = bool(website)
+            score = calculate_lead_score(has_website, rating, reviews, bool(phone))
+            lead_type = determine_lead_type(has_website, analysis_data['mobile_friendly'])
+            
+            # Check if analysis already exists (upsert)
+            existing = db.query(LeadAnalysis).filter(LeadAnalysis.business_id == business_id).first()
+            if existing:
+                existing.lead_type = lead_type
+                existing.lead_score = score
+                existing.ssl_enabled = analysis_data['ssl_enabled']
+                existing.mobile_friendly = analysis_data['mobile_friendly']
+                existing.load_time = analysis_data['load_time']
+            else:
+                analysis = LeadAnalysis(
+                    business_id=business_id,
+                    lead_type=lead_type,
+                    lead_score=score,
+                    ssl_enabled=analysis_data['ssl_enabled'],
+                    mobile_friendly=analysis_data['mobile_friendly'],
+                    load_time=analysis_data['load_time']
+                )
+                db.add(analysis)
+            
+            db.commit()
+            logger.info(f"[Analysis] Scored: business {business_id}, type={lead_type}, score={score}")
+            
+            # Optionally send Telegram notification for high-value leads
+            if score >= 6 and lead_type == "NO_WEBSITE":
+                try:
+                    from telegram_bot import notify_high_value_lead
+                    biz = db.query(Business).filter(Business.id == business_id).first()
+                    if biz:
+                        notify_loop = asyncio.new_event_loop()
+                        try:
+                            notify_loop.run_until_complete(notify_high_value_lead({
+                                "name": biz.name,
+                                "phone": biz.phone,
+                                "website": biz.website,
+                                "rating": biz.rating,
+                                "reviews": biz.reviews,
+                                "address": biz.address,
+                                "type": lead_type,
+                                "score": score
+                            }))
+                        finally:
+                            notify_loop.close()
+                except Exception as e:
+                    logger.warning(f"[Analysis] Failed to send Telegram notification: {e}")
+        finally:
+            db.close()
         
-        # Get scoring thresholds from environment (with defaults)
-        no_website_score = int(os.getenv("NO_WEBSITE_SCORE", "4"))
-        high_rating_score = int(os.getenv("HIGH_RATING_SCORE", "2"))
-        high_reviews_score = int(os.getenv("HIGH_REVIEWS_SCORE", "1"))
-        has_phone_score = int(os.getenv("HAS_PHONE_SCORE", "1"))
-        
-        has_website = bool(website)
-        score = calculate_lead_score(has_website, rating, reviews, bool(phone))
-        lead_type = determine_lead_type(has_website, analysis_data['mobile_friendly'])
-        
-        # Check if analysis already exists (upsert)
-        existing = db.query(LeadAnalysis).filter(LeadAnalysis.business_id == business_id).first()
-        if existing:
-            existing.lead_type = lead_type
-            existing.lead_score = score
-            existing.ssl_enabled = analysis_data['ssl_enabled']
-            existing.mobile_friendly = analysis_data['mobile_friendly']
-            existing.load_time = analysis_data['load_time']
-        else:
-            analysis = LeadAnalysis(
-                business_id=business_id,
-                lead_type=lead_type,
-                lead_score=score,
-                ssl_enabled=analysis_data['ssl_enabled'],
-                mobile_friendly=analysis_data['mobile_friendly'],
-                load_time=analysis_data['load_time']
-            )
-            db.add(analysis)
-        
-        db.commit()
-        logger.info(f"[Analysis] Scored: business {business_id}, type={lead_type}, score={score}")
-        
-        # Optionally send Telegram notification for high-value leads
-        if score >= 6 and lead_type == "NO_WEBSITE":
-            try:
-                from telegram_bot import notify_high_value_lead
-                biz = db.query(Business).filter(Business.id == business_id).first()
-                if biz:
-                    asyncio.run(notify_high_value_lead({
-                        "name": biz.name,
-                        "phone": biz.phone,
-                        "website": biz.website,
-                        "rating": biz.rating,
-                        "reviews": biz.reviews,
-                        "address": biz.address,
-                        "type": lead_type,
-                        "score": score
-                    }))
-            except Exception as e:
-                logger.warning(f"[Analysis] Failed to send Telegram notification: {e}")
-        
-        db.close()
         return {"business_id": business_id, "lead_type": lead_type, "score": score}
         
     except Exception as e:

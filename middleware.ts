@@ -7,11 +7,11 @@ export async function middleware(request: NextRequest) {
   // Create response to add security headers
   let response: NextResponse;
 
-  // Public pages that don't require authentication
-  if (pathname === "/login" || pathname === "/") {
+  // Only the login page is public — all other routes require authentication
+  if (pathname === "/login") {
     response = NextResponse.next();
   } else {
-    // Check authentication for protected routes
+    // Check authentication for protected routes (including dashboard /)
     try {
       const sessionCookie = request.cookies.get(AUTH_COOKIE_NAME)?.value;
       
@@ -30,7 +30,7 @@ export async function middleware(request: NextRequest) {
       }
 
       response = NextResponse.next();
-    } catch (error) {
+    } catch {
       // If auth verification fails, redirect to login
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("next", pathname);
@@ -46,7 +46,7 @@ export async function middleware(request: NextRequest) {
   response.headers.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
   response.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https:"
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https:"
   );
   
   return response;

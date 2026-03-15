@@ -6,7 +6,7 @@ set -e
 
 echo "=== Lead Engine VPS Deployment ==="
 
-APP_DOMAIN=${APP_DOMAIN:-dashboardforrksinfra.run.place}
+APP_DOMAIN=${APP_DOMAIN:-leadscraper.freelancleadsapp.tech}
 export CORS_ORIGINS=${CORS_ORIGINS:-https://${APP_DOMAIN},http://localhost:3000}
 
 # Check minimum RAM (2GB = 2097152 KB)

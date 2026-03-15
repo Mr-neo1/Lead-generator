@@ -18,7 +18,7 @@ print_warning() {
     echo -e "${YELLOW}[!]${NC} $1"
 }
 
-DOMAIN=${DOMAIN:-dashboardforrksinfra.run.place}
+DOMAIN=${DOMAIN:-leadscraper.freelancleadsapp.tech}
 
 # Step 1: System Update
 echo ""
@@ -70,14 +70,15 @@ cd /root/Lead-generator/backend
 # Create single root .env file
 cat > /root/Lead-generator/.env << EOF
 NEXT_PUBLIC_API_URL=https://${DOMAIN}
+NEXT_PUBLIC_API_KEY=${API_KEY:-CHANGE_ME_TO_SECURE_API_KEY}
 APP_URL=https://${DOMAIN}
 APP_LOGIN_USERNAME=admin
-APP_LOGIN_PASSWORD=change-me
-APP_LOGIN_SECRET=replace-with-a-long-random-secret
+APP_LOGIN_PASSWORD=${APP_LOGIN_PASSWORD:-change-me}
+APP_LOGIN_SECRET=${APP_LOGIN_SECRET:-replace-with-a-long-random-secret}
 DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
 REDIS_URL=redis://redis:6379/0
 USE_REDIS=true
-API_KEY=
+API_KEY=${API_KEY:-CHANGE_ME_TO_SECURE_API_KEY}
 CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=

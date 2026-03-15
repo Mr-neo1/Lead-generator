@@ -77,8 +77,11 @@ async def lifespan(app: FastAPI):
     
     # Validate critical configuration
     if not settings.api_key or settings.api_key == "":
-        logger.error("CRITICAL: API_KEY not configured! Set API_KEY environment variable.")
-        raise RuntimeError("API_KEY environment variable is required for security. Refusing to start.")
+        if settings.use_redis or not settings.debug:
+            logger.error("CRITICAL: API_KEY not configured! Set API_KEY environment variable.")
+            raise RuntimeError("API_KEY environment variable is required for production. Refusing to start.")
+        else:
+            logger.warning("API_KEY not set — running in LOCAL DEV mode (no auth enforcement).")
     
     if settings.api_key == "change-me-in-production":
         logger.error("CRITICAL: API_KEY still set to default value!")
@@ -139,18 +142,22 @@ async def audit_logging_middleware(request: Request, call_next):
     return response
 
 
-# API Key auth (optional)
+# API Key auth
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
-    """Verify API key - REQUIRED for all protected endpoints."""
+    """Verify API key - REQUIRED for all protected endpoints.
+    Skipped when API_KEY is not configured (local dev mode)."""
+    # In local dev mode (no API key configured), skip auth
+    if not settings.api_key:
+        return True
     if not api_key:
         raise HTTPException(
             status_code=401, 
             detail="API key required. Set X-API-Key header."
         )
     if api_key != settings.api_key:
-        logger.warning(f"Authentication failed - invalid API key attempt")
+        logger.warning("Authentication failed - invalid API key attempt")
         raise HTTPException(status_code=401, detail="Invalid API key")
     return True
 
@@ -398,44 +405,6 @@ async def restart_job(
 
 
 # Leads endpoints
-@app.get("/api/leads/export", tags=["Leads"])
-@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
-async def export_leads(
-    request: Request,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_api_key),
-    format: str = Query("csv", regex="^(csv|json)$")
-):
-    """Export leads in CSV or JSON format."""
-    leads = db.query(Business).filter(Business.is_blacklisted == False).all()
-    
-    if format == "csv":
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=[
-            "id", "place_id", "name", "phone", "website", "rating", 
-            "reviews", "category", "address", "status"
-        ])
-        writer.writeheader()
-        for lead in leads:
-            writer.writerow({
-                "id": lead.id,
-                "place_id": lead.place_id,
-                "name": lead.name,
-                "phone": lead.phone,
-                "website": lead.website,
-                "rating": lead.rating,
-                "reviews": lead.reviews,
-                "category": lead.category,
-                "address": lead.address,
-                "status": lead.status,
-            })
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment;filename=leads_export.csv"}
-        )
-    else:
-        return {"leads": [{"id": lead.id, "name": lead.name} for lead in leads]}
 
 
 @app.get("/api/leads", response_model=PaginatedLeadsResponse, tags=["Leads"])
@@ -642,7 +611,8 @@ async def export_leads(
     min_score: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_api_key)
 ):
     """Export leads as CSV file."""
     query = db.query(Business, LeadAnalysis)\
@@ -651,7 +621,7 @@ async def export_leads(
     
     if lead_type:
         query = query.filter(LeadAnalysis.lead_type == lead_type)
-    if min_score:
+    if min_score is not None:
         query = query.filter(LeadAnalysis.lead_score >= min_score)
     if status:
         query = query.filter(Business.status == status)
@@ -767,7 +737,7 @@ async def remove_from_blacklist(
 
 # Stats endpoints
 @app.get("/api/stats", response_model=StatsResponse, tags=["Stats"])
-async def get_stats(db: Session = Depends(get_db)):
+async def get_stats(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
     """Get basic dashboard statistics."""
     # Check cache
     global stats_cache
@@ -798,7 +768,7 @@ async def get_stats(db: Session = Depends(get_db)):
 
 
 @app.get("/api/stats/advanced", response_model=AdvancedStatsResponse, tags=["Stats"])
-async def get_advanced_stats(db: Session = Depends(get_db)):
+async def get_advanced_stats(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
     """Get detailed statistics for dashboard charts."""
     # Lead type distribution
     lead_type_counts = db.query(
@@ -808,11 +778,13 @@ async def get_advanced_stats(db: Session = Depends(get_db)):
     
     lead_types = {lt: count for lt, count in lead_type_counts}
     
-    # Score distribution
-    score_distribution = []
-    for score in range(9):
-        count = db.query(LeadAnalysis).filter(LeadAnalysis.lead_score == score).count()
-        score_distribution.append({"score": score, "count": count})
+    # Score distribution (single query instead of N+1)
+    score_counts = db.query(
+        LeadAnalysis.lead_score,
+        func.count(LeadAnalysis.business_id)
+    ).group_by(LeadAnalysis.lead_score).all()
+    score_map = {s: c for s, c in score_counts}
+    score_distribution = [{"score": s, "count": score_map.get(s, 0)} for s in range(9)]
     
     # Status distribution
     status_counts = db.query(

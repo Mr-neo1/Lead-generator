@@ -296,7 +296,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant={lead.type === "NO_WEBSITE" ? "destructive" : "secondary"}>
-                        {lead.type.replace("_", " ")}
+                        {lead.type.replaceAll("_", " ")}
                       </Badge>
                       <span className="font-bold text-emerald-600">{lead.score}/8</span>
                     </div>

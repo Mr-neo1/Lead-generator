@@ -52,8 +52,9 @@ ssh "$VPS_USER@$VPS_IP" "cp -r $PROJECT_DIR/.next/static $STANDALONE_DIR/.next/s
 # Step 5: Ensure .env file exists in standalone
 echo "⚙️  Ensuring environment variables are configured..."
 ssh "$VPS_USER@$VPS_IP" "cat > $STANDALONE_DIR/.env << 'ENVEOF'
-NEXT_PUBLIC_API_URL=https://leadscraper.freelanceleadsapp.tech
-APP_URL=https://leadscraper.freelanceleadsapp.tech
+NEXT_PUBLIC_API_URL=https://leadscraper.freelancleadsapp.tech
+NEXT_PUBLIC_API_KEY=\"${API_KEY}\"
+APP_URL=https://leadscraper.freelancleadsapp.tech
 APP_LOGIN_USERNAME=admin
 APP_LOGIN_PASSWORD=\"${PROD_PASSWORD}\"
 APP_LOGIN_SECRET=\"${PROD_SECRET}\"

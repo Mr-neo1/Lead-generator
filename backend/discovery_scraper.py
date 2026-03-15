@@ -4,6 +4,7 @@ import random
 import logging
 import re
 import os
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
                     if feed:
                         logger.info(f"Found results container with selector: {selector}")
                         break
-                except:
+                except Exception:
                     continue
             
             if not feed:
@@ -176,7 +177,7 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
                         if found:
                             elements = found
                             break
-                    except:
+                    except Exception:
                         continue
                 
                 for el in elements:
@@ -227,7 +228,7 @@ async def scrape_google_maps_grid(keyword: str, lat: float, lng: float, max_resu
                             logger.info("Reached end of results")
                             scroll_count = max_scrolls
                             break
-                    except:
+                    except Exception:
                         continue
             
             logger.info(f"Completed scraping: {len(results)} businesses found")
@@ -265,7 +266,7 @@ def extract_place_id(url: str) -> str:
             if len(parts) >= 2:
                 return parts[-2] if parts[-1].startswith('@') else parts[-1]
         
-        # Fallback: use hash of URL
-        return str(hash(url))
-    except:
-        return str(hash(url))
+        # Fallback: use deterministic hash of URL (consistent across restarts)
+        return hashlib.md5(url.encode()).hexdigest()[:16]
+    except Exception:
+        return hashlib.md5(url.encode()).hexdigest()[:16]

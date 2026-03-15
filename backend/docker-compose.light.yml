@@ -37,9 +37,10 @@ services:
       - DATABASE_URL=postgresql://leaduser:leadpassword@db:5432/leadengine
       - REDIS_URL=redis://redis:6379
       - USE_REDIS=true
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://dashboardforrksinfra.run.place,http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://leadscraper.freelancleadsapp.tech,http://localhost:3000}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - API_KEY=${API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -59,6 +60,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - API_KEY=${API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

@@ -2,7 +2,7 @@
 Pydantic schemas for request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 import re
 from typing import Optional, List
 from datetime import datetime
@@ -57,8 +57,17 @@ class LeadUpdate(BaseModel):
     @field_validator('notes')
     @classmethod
     def validate_notes(cls, v):
-        if v and '<script>' in v.lower():
-            raise ValueError('HTML/Script tags not allowed in notes')
+        if v:
+            lower = v.lower()
+            dangerous_patterns = [
+                '<script', '</script', '<iframe', '<embed', '<object',
+                'javascript:', 'onerror=', 'onload=', 'onclick=',
+                'onmouseover=', 'onfocus=', 'onblur=', '<svg',
+                '<img', 'expression(', 'eval(',
+            ]
+            for pattern in dangerous_patterns:
+                if pattern in lower:
+                    raise ValueError('Potentially dangerous content not allowed in notes')
         return v
 
 
