@@ -2,7 +2,8 @@
 Pydantic schemas for request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr, field_validator
+import re
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -45,6 +46,20 @@ class LeadUpdate(BaseModel):
     tags: Optional[str] = Field(None, max_length=500, description="Comma-separated tags")
     notes: Optional[str] = Field(None, max_length=2000)
     is_blacklisted: Optional[bool] = None
+    
+    @field_validator('tags')
+    @classmethod
+    def validate_tags(cls, v):
+        if v and len(v.split(',')) > 20:
+            raise ValueError('Maximum 20 tags allowed')
+        return v
+    
+    @field_validator('notes')
+    @classmethod
+    def validate_notes(cls, v):
+        if v and '<script>' in v.lower():
+            raise ValueError('HTML/Script tags not allowed in notes')
+        return v
 
 
 class BulkLeadUpdate(BaseModel):

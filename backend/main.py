@@ -18,6 +18,7 @@ import uuid
 import csv
 import io
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, List
 from math import ceil
@@ -40,6 +41,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Audit logger
+audit_logger = logging.getLogger("audit")
 
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -70,6 +74,16 @@ async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     # Startup
     logger.info("Starting Lead Engine API...")
+    
+    # Validate critical configuration
+    if not settings.api_key or settings.api_key == "":
+        logger.error("CRITICAL: API_KEY not configured! Set API_KEY environment variable.")
+        raise RuntimeError("API_KEY environment variable is required for security. Refusing to start.")
+    
+    if settings.api_key == "change-me-in-production":
+        logger.error("CRITICAL: API_KEY still set to default value!")
+        raise RuntimeError("API_KEY must be changed from default. Refusing to start.")
+    
     init_db()
     logger.info("Lead Engine API started successfully")
     yield
@@ -102,15 +116,42 @@ app.add_middleware(
 )
 
 
+# Audit logging middleware
+@app.middleware("http")
+async def audit_logging_middleware(request: Request, call_next):
+    """Log all write operations for compliance and debugging."""
+    start_time = time.time()
+    
+    # Only log write operations
+    if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
+        client_ip = request.client.host if request.client else "unknown"
+        audit_logger.info(
+            f"{request.method} {request.url.path} - {client_ip}"
+        )
+    
+    response = await call_next(request)
+    
+    # Log slow requests
+    process_time = time.time() - start_time
+    if process_time > 5.0:
+        logger.warning(f"Slow request: {request.method} {request.url.path} took {process_time:.2f}s")
+    
+    return response
+
+
 # API Key auth (optional)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
-    """Verify API key if configured."""
-    if not settings.api_key:
-        return True  # No auth required
+    """Verify API key - REQUIRED for all protected endpoints."""
+    if not api_key:
+        raise HTTPException(
+            status_code=401, 
+            detail="API key required. Set X-API-Key header."
+        )
     if api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        logger.warning(f"Authentication failed - invalid API key attempt")
+        raise HTTPException(status_code=401, detail="Invalid API key")
     return True
 
 
@@ -357,6 +398,46 @@ async def restart_job(
 
 
 # Leads endpoints
+@app.get("/api/leads/export", tags=["Leads"])
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def export_leads(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_api_key),
+    format: str = Query("csv", regex="^(csv|json)$")
+):
+    """Export leads in CSV or JSON format."""
+    leads = db.query(Business).filter(Business.is_blacklisted == False).all()
+    
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[
+            "id", "place_id", "name", "phone", "website", "rating", 
+            "reviews", "category", "address", "status"
+        ])
+        writer.writeheader()
+        for lead in leads:
+            writer.writerow({
+                "id": lead.id,
+                "place_id": lead.place_id,
+                "name": lead.name,
+                "phone": lead.phone,
+                "website": lead.website,
+                "rating": lead.rating,
+                "reviews": lead.reviews,
+                "category": lead.category,
+                "address": lead.address,
+                "status": lead.status,
+            })
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment;filename=leads_export.csv"}
+        )
+    else:
+        return {"leads": [{"id": lead.id, "name": lead.name} for lead in leads]}
+
+
 @app.get("/api/leads", response_model=PaginatedLeadsResponse, tags=["Leads"])
 @limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def get_leads(
@@ -369,7 +450,8 @@ async def get_leads(
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None, description="Search by name, phone, or address"),
     exclude_blacklisted: bool = Query(True),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_api_key)
 ):
     """Get paginated list of leads with filtering."""
     # Use joinedload to prevent N+1 queries

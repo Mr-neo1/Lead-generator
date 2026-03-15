@@ -11,7 +11,14 @@ interface SessionPayload {
 }
 
 function getAuthSecret(): string {
-  return process.env.APP_LOGIN_SECRET || "change-me-in-production";
+  const secret = process.env.APP_LOGIN_SECRET;
+  if (!secret || secret === "change-me-in-production") {
+    throw new Error(
+      "CRITICAL: APP_LOGIN_SECRET not configured or still set to default. " +
+      "Please set a strong secret in your .env file. Refusing to start."
+    );
+  }
+  return secret;
 }
 
 export function getConfiguredUsername(): string {
@@ -101,8 +108,21 @@ export async function verifySessionToken(token: string): Promise<boolean> {
   try {
     const payloadText = decoder.decode(fromBase64Url(encodedPayload));
     const payload = JSON.parse(payloadText) as SessionPayload;
-    return typeof payload.exp === "number" && payload.exp > Date.now();
-  } catch {
+    
+    // Validate expiration
+    if (!payload.exp || typeof payload.exp !== "number") {
+      console.error("Invalid session token: missing exp claim");
+      return false;
+    }
+    
+    if (payload.exp < Date.now()) {
+      console.error("Session token expired at", new Date(payload.exp));
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("Failed to verify session token:", error);
     return false;
   }
 }

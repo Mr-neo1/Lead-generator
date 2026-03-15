@@ -37,9 +37,9 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False)
     
     # Security
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for authentication (leave empty to disable)"
+    api_key: str = Field(
+        default="",
+        description="API key for authentication (REQUIRED in production)"
     )
     cors_origins: str = Field(
         default="https://leadscraper.freelancleadsapp.tech,http://localhost:3000",
